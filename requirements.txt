@@ -1,0 +1,10 @@
+kaggle
+requests
+opencv-python
+numpy
+pillow
+tqdm
+pyyaml
+ultralytics
+gdown
+wget
