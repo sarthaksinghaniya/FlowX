@@ -1,0 +1,10 @@
+names:
+  0: car
+  1: bus
+  2: truck
+  3: motorcycle
+  4: bicycle
+path: ../datasets/yolo_format
+test: test/images
+train: train/images
+val: val/images
