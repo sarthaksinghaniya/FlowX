@@ -53,6 +53,44 @@ def _render_corridor(route: list[str], corridor_states: dict[str, str], active_n
         column.write(label)
 
 
+def _render_comparison(
+    ai_metrics: dict,
+    static_metrics: dict,
+) -> None:
+    st.subheader("📊 Performance Comparison")
+
+    ai_summary = ai_metrics.get("summary", {})
+    static_summary = static_metrics.get("summary", {})
+
+    comparison_columns = st.columns(3)
+    comparison_columns[0].metric("AI Wait Time", f"{ai_summary.get('wait_time', 0.0):.2f}s")
+    comparison_columns[0].metric("Static Wait Time", f"{static_summary.get('wait_time', 0.0):.2f}s")
+
+    comparison_columns[1].metric("AI Queue Length", f"{ai_summary.get('queue_length', 0.0):.2f}")
+    comparison_columns[1].metric("Static Queue Length", f"{static_summary.get('queue_length', 0.0):.2f}")
+
+    comparison_columns[2].metric("AI Throughput", f"{ai_summary.get('throughput', 0.0):.2f}")
+    comparison_columns[2].metric("Static Throughput", f"{static_summary.get('throughput', 0.0):.2f}")
+
+    static_wait = float(static_summary.get("wait_time", 0.0))
+    ai_wait = float(ai_summary.get("wait_time", 0.0))
+    if static_wait > 0 and ai_wait <= static_wait:
+        improvement = ((static_wait - ai_wait) / static_wait) * 100
+        st.success(f"AI reduces wait time by {improvement:.1f}%")
+
+    chart_data = {
+        "AI": {
+            "Wait Time": ai_summary.get("wait_time", 0.0),
+            "Queue Length": ai_summary.get("queue_length", 0.0),
+        },
+        "Static": {
+            "Wait Time": static_summary.get("wait_time", 0.0),
+            "Queue Length": static_summary.get("queue_length", 0.0),
+        },
+    }
+    st.bar_chart(chart_data)
+
+
 def _resolve_video_source(uploaded_file: st.runtime.uploaded_file_manager.UploadedFile | None) -> tuple[Path | None, str | None]:
     if uploaded_file is not None:
         suffix = Path(uploaded_file.name).suffix or ".mp4"
@@ -95,6 +133,7 @@ def main() -> None:
     metrics_placeholder = st.empty()
     corridor_placeholder = st.empty()
     corridor_status_placeholder = st.empty()
+    comparison_placeholder = st.empty()
 
     video_path, temporary_path = _resolve_video_source(uploaded_video)
     if video_path is None:
@@ -171,6 +210,12 @@ def main() -> None:
                     route=result.get("emergency_route", []),
                     corridor_states=result.get("corridor_states", {}),
                     active_node=result.get("active_node"),
+                )
+
+            with comparison_placeholder.container():
+                _render_comparison(
+                    ai_metrics=result.get("ai_metrics", {}),
+                    static_metrics=result.get("static_metrics", {}),
                 )
     finally:
         _release_capture(capture)

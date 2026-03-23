@@ -6,6 +6,7 @@ from typing import Any, Dict, Mapping
 import cv2
 
 from config.lanes import FRAME_HEIGHT, FRAME_WIDTH, LANE_POLYGONS
+from src.comparison import simulate_ai, simulate_static
 from src.density import DensityCalculator
 from src.emergency_corridor import compute_path, generate_corridor
 from src.inference import YOLOInferenceEngine
@@ -119,6 +120,14 @@ def process_frame(frame: cv2.typing.MatLike, config: Mapping[str, Any]) -> Dict[
             "emergency_route": [],
             "corridor_states": {},
             "active_node": None,
+            "static_metrics": {
+                "per_lane": {"wait_time": {}, "queue_length": {}, "throughput": {}},
+                "summary": {"wait_time": 0.0, "queue_length": 0.0, "throughput": 0.0},
+            },
+            "ai_metrics": {
+                "per_lane": {"wait_time": {}, "queue_length": {}, "throughput": {}},
+                "summary": {"wait_time": 0.0, "queue_length": 0.0, "throughput": 0.0},
+            },
         }
 
     model_path = str(_get_required(config, "model_path", Path("models/traffic_detector.pt")))
@@ -171,6 +180,9 @@ def process_frame(frame: cv2.typing.MatLike, config: Mapping[str, Any]) -> Dict[
     if emergency_mode_enabled and emergency_detected:
         processed_frame = _draw_emergency_banner(processed_frame)
 
+    static_metrics = simulate_static(lane_counts)
+    ai_metrics = simulate_ai(green_times, lane_counts)
+
     return {
         "frame": processed_frame,
         "lane_counts": lane_counts,
@@ -181,4 +193,6 @@ def process_frame(frame: cv2.typing.MatLike, config: Mapping[str, Any]) -> Dict[
         "emergency_route": emergency_route,
         "corridor_states": corridor_states,
         "active_node": active_node,
+        "static_metrics": static_metrics,
+        "ai_metrics": ai_metrics,
     }
