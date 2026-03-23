@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+from collections import deque
 import tempfile
+from time import perf_counter
 from pathlib import Path
 
 import cv2
 import streamlit as st
 
+from src.comparison import simulate_ai, simulate_static
+from src.density import DensityCalculator
+from src.emergency_corridor import compute_path
 from src.pipeline import process_frame
+from src.signal_control import SignalController
 
 
 ROOT_DIR = Path(__file__).resolve().parent
 DEFAULT_VIDEO_PATH = ROOT_DIR / "demo" / "test_video.mp4"
 DEFAULT_MODEL_PATH = ROOT_DIR / "models" / "traffic_detector.pt"
+DEMO_EMERGENCY_TRIGGER_FRAME = 45
+_DENSITY_CALCULATOR = DensityCalculator()
 
 
 def _render_metrics(
@@ -19,6 +27,7 @@ def _render_metrics(
     densities: dict[str, float],
     green_times: dict[str, int],
     active_lane: str | None,
+    fps: float,
 ) -> None:
     lane_names = list(lane_counts.keys())
 
@@ -34,8 +43,9 @@ def _render_metrics(
     for column, lane_name in zip(green_columns, lane_names):
         column.metric(f"{lane_name} Green", f"{green_times.get(lane_name, 0)} sec")
 
-    active_column = st.columns(1)[0]
-    active_column.metric("Active Lane", active_lane or "None")
+    summary_columns = st.columns(2)
+    summary_columns[0].metric("Active Lane", active_lane or "None")
+    summary_columns[1].metric("FPS", f"{fps:.1f}")
 
 
 def _render_corridor(route: list[str], corridor_states: dict[str, str], active_node: str | None) -> None:
@@ -109,9 +119,154 @@ def _release_capture(capture: cv2.VideoCapture | None) -> None:
         capture.release()
 
 
+def _init_session_state() -> None:
+    if "event_log" not in st.session_state:
+        st.session_state.event_log = deque(maxlen=6)
+    if "last_active_lane" not in st.session_state:
+        st.session_state.last_active_lane = None
+    if "last_emergency" not in st.session_state:
+        st.session_state.last_emergency = False
+    if "last_corridor" not in st.session_state:
+        st.session_state.last_corridor = False
+    if "playback_reset_id" not in st.session_state:
+        st.session_state.playback_reset_id = 0
+
+
+def _log_event(message: str) -> None:
+    st.session_state.event_log.appendleft(message)
+
+
+def _reset_demo() -> None:
+    st.session_state.event_log = deque(maxlen=6)
+    st.session_state.last_active_lane = None
+    st.session_state.last_emergency = False
+    st.session_state.last_corridor = False
+    st.session_state.playback_reset_id += 1
+
+
+def _generate_demo_corridor(route: list[str], current_index: int) -> dict[str, str]:
+    states: dict[str, str] = {}
+    for index, node in enumerate(route):
+        if index == current_index:
+            states[node] = "GREEN"
+        elif index == current_index + 1:
+            states[node] = "PREPARE"
+        else:
+            states[node] = "WAIT"
+    return states
+
+
+def _apply_demo_scenario(
+    result: dict,
+    processed_frames: int,
+    cycle_time: int,
+    emergency_mode: bool,
+) -> dict:
+    lane_counts = {
+        "lane_1": 4,
+        "lane_2": 18 + (processed_frames % 5),
+        "lane_3": 3,
+        "lane_4": 2,
+    }
+    densities = _DENSITY_CALCULATOR.compute(lane_counts)
+    green_times = SignalController(cycle_time=cycle_time, minimum_green=10).allocate_green_times(densities)
+    active_lane = max(green_times, key=green_times.get)
+    emergency_detected = processed_frames >= DEMO_EMERGENCY_TRIGGER_FRAME
+    emergency_route: list[str] = []
+    corridor_states: dict[str, str] = {}
+    active_node: str | None = None
+
+    if emergency_detected and emergency_mode:
+        green_times = {
+            "lane_1": 10,
+            "lane_2": max(10, cycle_time - 30),
+            "lane_3": 10,
+            "lane_4": 10,
+        }
+        active_lane = "lane_2"
+        emergency_route = compute_path("A", "D")
+        if emergency_route:
+            corridor_step = min((processed_frames - DEMO_EMERGENCY_TRIGGER_FRAME) // 20, len(emergency_route) - 1)
+            corridor_states = _generate_demo_corridor(emergency_route, corridor_step)
+            active_node = emergency_route[corridor_step]
+
+    result["lane_counts"] = lane_counts
+    result["densities"] = densities
+    result["green_times"] = green_times
+    result["active_lane"] = active_lane
+    result["emergency"] = emergency_detected
+    result["emergency_route"] = emergency_route
+    result["corridor_states"] = corridor_states
+    result["active_node"] = active_node
+    result["static_metrics"] = simulate_static(lane_counts)
+    result["ai_metrics"] = simulate_ai(green_times, lane_counts)
+    return result
+
+
+def _draw_status_overlay(
+    frame: cv2.typing.MatLike,
+    active_lane: str | None,
+    emergency_mode: bool,
+    corridor_active: bool,
+    fps: float,
+) -> cv2.typing.MatLike:
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (8, 8), (340, 122), (20, 20, 20), -1)
+    cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
+
+    lines = [
+        f"Active Lane: {active_lane or 'None'}",
+        f"Emergency Mode: {'ON' if emergency_mode else 'OFF'}",
+        f"Corridor Active: {'YES' if corridor_active else 'NO'}",
+        f"FPS: {fps:.1f}",
+    ]
+
+    for index, line in enumerate(lines):
+        cv2.putText(
+            frame,
+            line,
+            (20, 36 + (index * 22)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+    return frame
+
+
+def _render_log_panel() -> None:
+    st.subheader("Recent Events")
+    if not st.session_state.event_log:
+        st.write("No events yet")
+        return
+
+    for message in st.session_state.event_log:
+        st.write(f"- {message}")
+
+
+def _update_event_log(result: dict, corridor_active: bool) -> None:
+    active_lane = result.get("active_lane")
+    emergency_detected = bool(result.get("emergency"))
+
+    if active_lane and active_lane != st.session_state.last_active_lane:
+        _log_event(f"{active_lane.replace('_', ' ').title()} turned green")
+        st.session_state.last_active_lane = active_lane
+
+    if emergency_detected and not st.session_state.last_emergency:
+        _log_event("Emergency detected")
+    st.session_state.last_emergency = emergency_detected
+
+    if corridor_active and not st.session_state.last_corridor:
+        _log_event("Corridor activated")
+    st.session_state.last_corridor = corridor_active
+
+
 def main() -> None:
     st.set_page_config(page_title="FlowX Dashboard", layout="wide")
     st.title("FlowX Traffic Intelligence Dashboard")
+    _init_session_state()
 
     with st.sidebar:
         st.header("Controls")
@@ -125,15 +280,28 @@ def main() -> None:
         )
         frame_skip = st.slider("Frame skip", min_value=1, max_value=5, value=1, step=1)
         emergency_mode = st.toggle("Emergency Mode", value=False)
+        demo_mode = st.toggle("Demo Scenario Mode", value=False)
         uploaded_video = st.file_uploader("Upload video", type=["mp4", "avi", "mov", "mkv"])
         start_processing = st.button("Start Processing", type="primary")
+        reset_requested = st.button("Reset Playback")
 
-    video_placeholder = st.empty()
-    status_placeholder = st.empty()
-    metrics_placeholder = st.empty()
-    corridor_placeholder = st.empty()
-    corridor_status_placeholder = st.empty()
-    comparison_placeholder = st.empty()
+    if reset_requested:
+        _reset_demo()
+        st.rerun()
+
+    left_column, right_column = st.columns([1.6, 1.0])
+
+    with left_column:
+        video_placeholder = st.empty()
+        loading_placeholder = st.empty()
+
+    with right_column:
+        status_placeholder = st.empty()
+        metrics_placeholder = st.empty()
+        corridor_status_placeholder = st.empty()
+        corridor_placeholder = st.empty()
+        comparison_placeholder = st.empty()
+        log_placeholder = st.empty()
 
     video_path, temporary_path = _resolve_video_source(uploaded_video)
     if video_path is None:
@@ -151,7 +319,10 @@ def main() -> None:
         return
 
     capture: cv2.VideoCapture | None = None
+    previous_frame_time = perf_counter()
+    processed_frames = 0
     try:
+        loading_placeholder.info("Loading model...")
         capture = cv2.VideoCapture(str(video_path))
         if not capture.isOpened():
             st.error(f"Unable to open video: {video_path}")
@@ -169,6 +340,7 @@ def main() -> None:
                 continue
 
             try:
+                loading_placeholder.info("Processing video...")
                 result = process_frame(
                     frame,
                     {
@@ -183,17 +355,42 @@ def main() -> None:
                 st.error(f"Pipeline failed: {exc}")
                 break
 
-            frame_rgb = cv2.cvtColor(result["frame"], cv2.COLOR_BGR2RGB)
+            processed_frames += 1
+            if demo_mode:
+                result = _apply_demo_scenario(
+                    result=result,
+                    processed_frames=processed_frames,
+                    cycle_time=cycle_time,
+                    emergency_mode=emergency_mode,
+                )
+
+            current_time = perf_counter()
+            fps = 1.0 / max(current_time - previous_frame_time, 1e-6)
+            previous_frame_time = current_time
+            corridor_active = emergency_mode and bool(result.get("emergency_route"))
+            _update_event_log(result, corridor_active)
+
+            display_frame = _draw_status_overlay(
+                frame=result["frame"].copy(),
+                active_lane=result.get("active_lane"),
+                emergency_mode=emergency_mode,
+                corridor_active=corridor_active,
+                fps=fps,
+            )
+            frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
             video_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
 
             if emergency_mode and result["emergency"]:
                 status_placeholder.error("🚑 Emergency Mode Activated")
-                corridor_status_placeholder.warning("🚑 Emergency Corridor Active")
+                if corridor_active:
+                    corridor_status_placeholder.warning("🚑 Emergency Corridor Active")
+                else:
+                    corridor_status_placeholder.info("Emergency detected. Corridor pending.")
             else:
                 emergency_mode_status = "ON" if emergency_mode else "OFF"
                 active_lane_text = result["active_lane"] or "None"
                 status_placeholder.info(
-                    f"Active lane: {active_lane_text} | Emergency mode: {emergency_mode_status}"
+                    f"Active lane: {active_lane_text} | Emergency mode: {emergency_mode_status} | Demo mode: {'ON' if demo_mode else 'OFF'}"
                 )
                 corridor_status_placeholder.empty()
 
@@ -203,6 +400,7 @@ def main() -> None:
                     densities=result["densities"],
                     green_times=result["green_times"],
                     active_lane=result["active_lane"],
+                    fps=fps,
                 )
 
             with corridor_placeholder.container():
@@ -217,7 +415,13 @@ def main() -> None:
                     ai_metrics=result.get("ai_metrics", {}),
                     static_metrics=result.get("static_metrics", {}),
                 )
+
+            with log_placeholder.container():
+                _render_log_panel()
+
+        loading_placeholder.empty()
     finally:
+        loading_placeholder.empty()
         _release_capture(capture)
         if temporary_path is not None:
             Path(temporary_path).unlink(missing_ok=True)
