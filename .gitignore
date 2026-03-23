@@ -115,6 +115,7 @@ dmypy.json
 
 # Dataset files (large and numerous)
 datasets/
+!datasets/dataset.yaml
 *.zip
 *.tar.gz
 *.tar
