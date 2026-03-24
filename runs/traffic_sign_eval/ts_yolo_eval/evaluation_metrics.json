@@ -1,0 +1,12 @@
+{
+  "timestamp_utc": "2026-03-24T04:27:19.767870+00:00",
+  "checkpoint": "C:\\Users\\LOQ\\Desktop\\FlowX\\runs\\traffic_sign_training\\ts_yolo_model7\\weights\\best.pt",
+  "dataset_yaml": "C:\\Users\\LOQ\\Desktop\\FlowX\\config\\traffic_sign_data.yaml",
+  "metrics": {
+    "metrics/precision(B)": 0.9719692214425592,
+    "metrics/recall(B)": 0.8618939810399415,
+    "metrics/mAP50(B)": 0.9416283048239849,
+    "metrics/mAP50-95(B)": 0.7943924414587629,
+    "fitness": 0.7943924414587629
+  }
+}
