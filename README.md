@@ -1,100 +1,225 @@
-# FlowX
+# FlowX — AI Traffic Intelligence System
 
-FlowX is a traffic intelligence project with a Streamlit dashboard and YOLO-based model workflows for:
+FlowX is an AI-powered traffic intelligence platform built for adaptive traffic control, crash-aware response, and emergency route prioritization. It combines computer vision, machine learning, and decision intelligence into a single real-time dashboard for smart mobility scenarios.
 
-- vehicle detection and adaptive signal simulation
-- emergency green-corridor logic
-- traffic sign detection training + evaluation
+## Overview
 
-## What Is Working Now
+FlowX is designed as a real-time AI traffic control system that:
 
-- Real-time dashboard entrypoint: `app.py`
-- Core runtime modules: `src/`
-- Vehicle model usage in app: `models/traffic_detector.pt`
-- Traffic sign training/evaluation script: `training/train_traffic_sign_yolo.py`
-- Traffic sign checkpoint target: `models/traffic_sign_detector.pt`
-- Evaluation artifacts are saved under `runs/traffic_sign_eval/`
+- Analyzes live or recorded traffic video
+- Detects vehicles and estimates lane-level density
+- Identifies crash conditions and severity signals
+- Prioritizes emergency movement through dynamic signal control
+- Visualizes decisions, signals, and intersections in an interactive dashboard
 
-## Repository Layout
+At its core, FlowX connects perception, inference, and traffic decision logic into one operational pipeline.
 
-- `app.py` Streamlit dashboard
-- `src/` pipeline, signal, emergency corridor, comparison logic
-- `training/` YOLO training scripts
-- `config/` dataset and lane configs
-- `models/` model checkpoints
-- `demo/` demo media used by dashboard
-- `runs/` training/validation/evaluation outputs
-- `traffic_sign_dataset/` traffic sign dataset files
-- `video_dataset/` traffic video assets
-- `reports/`, `outputs/`, `notebooks/` research and generated artifacts
+## Problem Statement
 
-## Setup
+Urban traffic systems still rely heavily on static traffic lights and fixed timing plans. This leads to:
 
-Install base dependencies:
+- Inefficient signal allocation during variable traffic demand
+- Congestion buildup at overloaded lanes
+- Delayed emergency movement through busy intersections
+- No direct crash-awareness in traffic signal decisions
+
+Traditional systems react too slowly to live road conditions and provide little intelligence during abnormal events.
+
+## Solution
+
+FlowX addresses these gaps through adaptive, AI-driven traffic management:
+
+- Adaptive signal timing based on live density estimation
+- Crash-aware decision support for safer control behavior
+- Emergency green-corridor logic for high-priority vehicle passage
+- Transparent dashboard visualizations for operators, demos, and evaluations
+
+## Key Features
+
+- Real-time vehicle detection using YOLO-based vision pipelines
+- Density-based signal optimization across lanes
+- Crash severity detection with an AI model
+- Emergency vehicle priority and green-corridor routing
+- AI decision engine with priority logic and finite-state control
+- Multi-intersection Mapbox visualization with pydeck
+- Animated traffic signal simulation
+- Simulation speed control for demos and analysis
+- Performance comparison dashboard for AI vs static control behavior
+
+## System Architecture
+
+```text
+Video Input
+  -> YOLO Detection
+  -> Lane Mapping
+  -> Density Engine
+  -> Crash Detection
+  -> Emergency Override
+  -> Priority Engine
+  -> Signal Control
+  -> Dashboard
+```
+
+## Core Algorithms
+
+### Density Estimation
+
+```text
+D_i = (alpha V_i + beta Q_i + gamma T_i) / Capacity
+```
+
+Where:
+
+- `V_i` = vehicle count for lane `i`
+- `Q_i` = queue pressure or backlog estimate
+- `T_i` = temporal weighting term
+- `Capacity` = normalized lane capacity
+
+### Green Time Allocation
+
+```text
+G_i = (D_i / sum(D)) x Cycle Time
+```
+
+This allocates green duration proportionally to lane demand.
+
+### Crash-Aware Adjustment
+
+```text
+D_eff = D_i + lambda x Crash Weight
+```
+
+This increases effective priority when crash severity requires intervention.
+
+### Control Logic
+
+FlowX uses:
+
+- A finite-state machine with `NORMAL`, `CRASH`, and `EMERGENCY` modes
+- Priority-based decision logic for lane selection and override handling
+- Signal timing policies that support normal flow, crash response, and emergency routing
+
+## Project Structure
+
+```text
+FlowX/
+├── app.py
+├── src/
+├── training/
+├── models/
+├── config/
+├── demo/
+├── outputs/
+├── runs/
+├── reports/
+├── tests/
+└── README.md
+```
+
+Key directories:
+
+- `app.py` — Streamlit dashboard entrypoint
+- `src/` — core pipeline, density logic, emergency corridor, signal control, and comparison utilities
+- `training/` — model training scripts including crash-model training
+- `models/` — trained checkpoints and model assets
+- `config/` — configuration files for lanes, datasets, and runtime setup
+- `demo/` — demo video assets used by the dashboard
+- `outputs/` — generated artifacts, processed outputs, and exported results
+- `runs/` — experiment logs, evaluation snapshots, and training run artifacts
+- `reports/` — analysis summaries and supporting documentation
+
+## How to Run
+
+### Install
 
 ```bash
 pip install -r requirements.txt
-pip install streamlit
 ```
 
-## Run Dashboard
+### Launch Dashboard
 
 ```bash
 streamlit run app.py
 ```
 
-Default assets used by dashboard:
-
-- Video: `demo/test_video.mp4`
-- Vehicle model: `models/traffic_detector.pt`
-
-## Traffic Sign Training + Evaluation
-
-Train (and evaluate after training):
+### Train Crash Model
 
 ```bash
-python training/train_traffic_sign_yolo.py \
-  --train-list train.txt \
-  --val-list test.txt \
-  --classes-file classes.names \
-  --device cpu
+python training/train_crash_model.py
 ```
 
-Evaluate only from existing checkpoint:
+Default dashboard flow uses:
 
-```bash
-python training/train_traffic_sign_yolo.py \
-  --eval-only \
-  --checkpoint models/traffic_sign_detector.pt \
-  --train-list train.txt \
-  --val-list test.txt \
-  --classes-file classes.names \
-  --device cpu \
-  --eval-name ts_yolo_eval
-```
+- Demo video assets from `demo/`
+- Model checkpoints from `models/`
+- Generated outputs and logs under `outputs/` and `runs/`
 
-### Evaluation Outputs
+## Results
 
-Each eval run saves:
+FlowX is designed to deliver measurable operational gains:
 
-- standard YOLO validation plots/images
-- `evaluation_metrics.json`
-- `evaluation_summary.txt`
+- Reduced vehicle waiting time through adaptive signal allocation
+- Improved throughput compared with static timing approaches
+- Faster emergency response through priority-aware signal switching
+- Better traffic visibility through real-time AI state monitoring
 
-at:
+## Demo Scenarios
 
-- `runs/traffic_sign_eval/<eval-name>/`
+The system supports clear demonstration flows for:
 
-## Latest Traffic Sign Eval Snapshot
+- Normal traffic balancing
+- Crash-detected adaptive response
+- Emergency override and green-corridor activation
 
-From run saved at `runs/traffic_sign_eval/ts_yolo_model6_eval` (March 24, 2026):
+## Future Scope
 
-- Precision: `0.9719`
-- Recall: `0.8619`
-- mAP50: `0.9416`
-- mAP50-95: `0.7944`
+- Multi-intersection scaling across larger urban grids
+- Reinforcement learning for signal optimization
+- Smart-city platform integration
+- IoT and vehicle-to-infrastructure communication
+- Live edge deployment with connected traffic hardware
 
-## Notes
+## Why FlowX Is Unique
 
-- `training/train_yolo.py` is a minimal baseline script; active traffic-sign workflow is in `training/train_traffic_sign_yolo.py`.
-- If `sample_image.jpg` is not present, sample inference step is skipped automatically.
+FlowX stands out because it combines:
+
+- Crash-aware traffic control instead of density-only optimization
+- Emergency intelligence with route-priority behavior
+- Transparent AI decision visualization for operators and judges
+- Real-time adaptability across signals, state transitions, and map views
+
+## Screenshots
+
+Add project screenshots to the repository and update the paths below.
+
+### Dashboard
+
+![FlowX Dashboard](outputs/images/dashboard-placeholder.png)
+
+### Map View
+
+![FlowX Map View](outputs/images/map-view-placeholder.png)
+
+### Signal Animation
+
+![FlowX Signal Animation](outputs/images/signal-animation-placeholder.png)
+
+## Outputs and Logs
+
+FlowX stores generated artifacts and experiment traces in the repository structure:
+
+- `outputs/` for processed media, exports, visual outputs, and dashboard assets
+- `runs/` for model runs, evaluation logs, and experiment artifacts
+- `reports/` for summaries, findings, and supporting analysis
+
+Recommended examples to include over time:
+
+- Dashboard screenshots
+- Detection output frames
+- Crash inference logs
+- Signal timing comparison charts
+- Evaluation summaries and run metadata
+
+## License
+
+MIT License
