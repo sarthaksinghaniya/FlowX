@@ -1,29 +1,54 @@
+# ------------------------------
+# Python / Notebook cache
+# ------------------------------
 __pycache__/
 *.py[cod]
+*$py.class
 .ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-outputs/
+# ------------------------------
+# Environments / secrets
+# ------------------------------
+.env
+.env.*
+.venv/
+venv/
+env/
+
+# ------------------------------
+# IDE / OS files
+# ------------------------------
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# ------------------------------
+# Logs / temp files
+# ------------------------------
 *.tmp
 *.temp
 *.log
 *.cache
 *.bak
 
-.env
-.venv/
-venv/
-env/
+# ------------------------------
+# ML outputs / artifacts
+# ------------------------------
+outputs/
+runs/
+wandb/
 
-.vscode/
-.idea/
+# Training checkpoints (generated)
+models/*.pth
 
-Thumbs.db
-.DS_Store
-
+# ------------------------------
+# Local datasets (do not track)
+# ------------------------------
 datasets/
 traffic_sign_dataset/
 signs/
-
-
 video_dataset/
-
