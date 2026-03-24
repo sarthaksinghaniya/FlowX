@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections import deque
 import tempfile
 from time import perf_counter
+import time
 from pathlib import Path
 
 import cv2
+import pydeck as pdk
 import streamlit as st
 
 from src.comparison import simulate_ai, simulate_static
@@ -20,6 +22,25 @@ DEFAULT_VIDEO_PATH = ROOT_DIR / "demo" / "test_video.mp4"
 DEFAULT_MODEL_PATH = ROOT_DIR / "models" / "traffic_detector.pt"
 DEMO_EMERGENCY_TRIGGER_FRAME = 45
 _DENSITY_CALCULATOR = DensityCalculator()
+INTERSECTIONS = [
+    {"id": 1, "lat": 26.8467, "lon": 80.9462},
+    {"id": 2, "lat": 26.8475, "lon": 80.9470},
+    {"id": 3, "lat": 26.8482, "lon": 80.9480},
+]
+
+
+def _resolve_density_map(result: dict) -> dict[str, float]:
+    densities = result.get("densities", {})
+    if isinstance(densities, dict):
+        return {str(k): float(v) for k, v in densities.items()}
+
+    if isinstance(densities, list):
+        lane_order = result.get("lane_order", [])
+        if isinstance(lane_order, list) and lane_order and len(lane_order) == len(densities):
+            return {str(lane): float(densities[idx]) for idx, lane in enumerate(lane_order)}
+        return {f"lane_{idx + 1}": float(value) for idx, value in enumerate(densities)}
+
+    return {}
 
 
 def _render_metrics(
@@ -48,6 +69,85 @@ def _render_metrics(
     summary_columns[1].metric("FPS", f"{fps:.1f}")
 
 
+def get_signal_color(lane: int, selected_lane: int | None, timer: int) -> str:
+    if lane == selected_lane:
+        if timer <= 3:
+            return "yellow"
+        return "green"
+    return "red"
+
+
+def _lane_to_index(lane_value: str | int | None) -> int | None:
+    if isinstance(lane_value, int):
+        return lane_value if lane_value >= 0 else None
+    if isinstance(lane_value, str) and lane_value.startswith("lane_"):
+        lane_number = lane_value.split("_")[-1]
+        if lane_number.isdigit():
+            return max(int(lane_number) - 1, 0)
+    return None
+
+
+def _render_signal_panel(selected_lane: int | None, timer: int) -> None:
+    st.subheader("Traffic Signal Animation")
+    lane_label = f"Lane {selected_lane + 1}" if selected_lane is not None else "None"
+    st.write(f"Current Lane: {lane_label}")
+    st.write(f"Time Left: {max(timer, 0)}s")
+
+    cols = st.columns(4)
+    for i, col in enumerate(cols):
+        color = get_signal_color(i, selected_lane, timer)
+        lane_text = f"Lane {i + 1}"
+        if color == "green":
+            col.success(f"{lane_text}\n🟢 GREEN")
+        elif color == "yellow":
+            col.warning(f"{lane_text}\n🟡 YELLOW")
+        else:
+            col.error(f"{lane_text}\n🔴 RED")
+
+
+def _tick_signal_state(speed: float) -> None:
+    now = perf_counter()
+    last_tick = float(st.session_state.signal_last_tick)
+    elapsed = max(0.0, now - last_tick)
+    tick_count = int(elapsed * speed)
+    if tick_count <= 0:
+        return
+
+    for _ in range(tick_count):
+        st.session_state.timer = max(int(st.session_state.timer) - 1, 0)
+        if st.session_state.timer == 0:
+            pending_lane = st.session_state.pending_signal_lane
+            pending_green = max(int(st.session_state.pending_green_time), 4)
+            if pending_lane is not None:
+                st.session_state.signal_lane = pending_lane
+            st.session_state.timer = pending_green
+
+    st.session_state.signal_last_tick = last_tick + (tick_count / speed)
+
+
+def _update_signal_animation(result: dict, speed: float) -> tuple[int | None, int]:
+    active_lane = result.get("active_lane")
+    selected_lane = _lane_to_index(active_lane)
+    green_times = result.get("green_times", {})
+    green_time = 10
+    if isinstance(active_lane, str) and isinstance(green_times, dict):
+        green_time = max(int(green_times.get(active_lane, 10)), 4)
+
+    if st.session_state.signal_lane is None and selected_lane is not None:
+        st.session_state.signal_lane = selected_lane
+        st.session_state.pending_signal_lane = selected_lane
+        st.session_state.pending_green_time = green_time
+        st.session_state.timer = green_time
+        st.session_state.signal_last_tick = perf_counter()
+    else:
+        if selected_lane is not None:
+            st.session_state.pending_signal_lane = selected_lane
+            st.session_state.pending_green_time = green_time
+        _tick_signal_state(speed)
+
+    return st.session_state.signal_lane, int(st.session_state.timer)
+
+
 def _render_corridor(route: list[str], corridor_states: dict[str, str], active_node: str | None) -> None:
     st.subheader("Emergency Corridor")
     if not route:
@@ -61,6 +161,197 @@ def _render_corridor(route: list[str], corridor_states: dict[str, str], active_n
         if node == active_node:
             column.metric("Active Node", node)
         column.write(label)
+
+
+def _state_label(raw_state: str | None) -> str:
+    if raw_state == "EMERGENCY_MODE":
+        return "EMERGENCY"
+    if raw_state == "CRASH_MODE":
+        return "CRASH"
+    return "NORMAL"
+
+
+def _render_state_and_decision(result: dict) -> None:
+    state = _state_label(result.get("state"))
+    reason = result.get("reason") or "Normal flow allocation"
+    selected_lane = result.get("selected_lane")
+    if selected_lane is None or int(selected_lane) < 0:
+        selected_lane_text = "N/A"
+    else:
+        selected_lane_text = f"Lane {int(selected_lane) + 1}"
+
+    state_color = {
+        "NORMAL": "#16a34a",
+        "CRASH": "#f59e0b",
+        "EMERGENCY": "#dc2626",
+    }.get(state, "#475569")
+
+    st.markdown(
+        f"""
+        <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;background:#f8fafc;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <div style="font-size:0.85rem;color:#475569;">SYSTEM STATE</div>
+            <div style="padding:4px 10px;border-radius:999px;background:{state_color};color:white;font-weight:700;font-size:0.78rem;">
+              {state}
+            </div>
+          </div>
+          <div style="margin-top:10px;font-size:0.9rem;color:#0f172a;font-weight:600;">AI Decision:</div>
+          <div style="font-size:1rem;color:#111827;">
+            {selected_lane_text} prioritized: {reason}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_crash_panel(result: dict) -> None:
+    crash_class = result.get("crash_class")
+    crash_conf = float(result.get("crash_confidence", 0.0))
+    if not crash_class:
+        crash_class = "minor"
+        crash_conf = 0.0
+        status_text = "No crash signal"
+    else:
+        status_text = crash_class.upper()
+
+    color = {
+        "major": "#dc2626",
+        "moderate": "#f59e0b",
+        "minor": "#16a34a",
+    }.get(str(crash_class).lower(), "#16a34a")
+
+    st.markdown(
+        f"""
+        <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;background:white;">
+          <div style="font-size:0.85rem;color:#475569;">CRASH PANEL</div>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:10px;">
+            <div style="width:12px;height:12px;border-radius:999px;background:{color};"></div>
+            <div style="font-size:1rem;font-weight:700;color:#0f172a;">{status_text}</div>
+          </div>
+          <div style="margin-top:8px;font-size:0.9rem;color:#334155;">
+            Confidence: {crash_conf:.2f}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_flow_graphs(result: dict) -> None:
+    st.subheader("Flow Intelligence Graphs")
+
+    densities = _resolve_density_map(result)
+    if densities:
+        st.caption("Density per lane")
+        st.bar_chart(densities)
+    else:
+        st.caption("Density per lane")
+        st.write("No density data")
+
+    history = st.session_state.signal_timeline
+    if history:
+        st.caption("Signal timeline")
+        chart_data: dict[str, list[float]] = {}
+        for entry in history:
+            for lane_name in entry:
+                chart_data.setdefault(lane_name, []).append(float(entry[lane_name]))
+            for lane_name in list(chart_data.keys()):
+                if lane_name not in entry:
+                    chart_data[lane_name].append(0.0)
+        st.line_chart(chart_data)
+    else:
+        st.caption("Signal timeline")
+        st.write("No timeline data yet")
+
+
+def _state_color(raw_state: str | None) -> list[int]:
+    if raw_state == "EMERGENCY_MODE":
+        return [255, 0, 0]
+    if raw_state == "CRASH_MODE":
+        return [255, 165, 0]
+    return [0, 255, 0]
+
+
+def _simulate_intersections(result: dict, processed_frames: int, emergency_mode: bool) -> list[dict]:
+    selected_lane = _lane_to_index(result.get("active_lane"))
+    fallback_state = str(result.get("state") or "NORMAL")
+    intersections: list[dict] = []
+
+    for index, node in enumerate(INTERSECTIONS):
+        active_lane = ((processed_frames // max(1, 6 - index)) + index) % 4
+        state = "NORMAL"
+
+        if index == 0 and selected_lane is not None:
+            active_lane = selected_lane
+            state = fallback_state
+        elif emergency_mode and processed_frames >= DEMO_EMERGENCY_TRIGGER_FRAME and index == 1:
+            state = "EMERGENCY_MODE"
+        elif processed_frames % 18 in range(5, 9) and index == 2:
+            state = "CRASH_MODE"
+
+        intersections.append(
+            {
+                "id": node["id"],
+                "lat": node["lat"],
+                "lon": node["lon"],
+                "active_lane": active_lane + 1,
+                "state": state,
+                "color": _state_color(state),
+            }
+        )
+
+    return intersections
+
+
+def _road_segments(intersections: list[dict]) -> list[dict]:
+    segments: list[dict] = []
+    for start, end in zip(intersections, intersections[1:]):
+        segments.append(
+            {
+                "source": [start["lon"], start["lat"]],
+                "target": [end["lon"], end["lat"]],
+                "color": [80, 80, 80],
+            }
+        )
+    return segments
+
+
+def _render_map_view(intersections: list[dict]) -> None:
+    st.subheader("🗺️ Traffic Map View")
+    st.markdown('<div id="flowx_mapbox"></div>', unsafe_allow_html=True)
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=intersections,
+        get_position="[lon, lat]",
+        get_color="color",
+        get_radius=80,
+        pickable=True,
+    )
+    roads_layer = pdk.Layer(
+        "LineLayer",
+        data=_road_segments(intersections),
+        get_source_position="source",
+        get_target_position="target",
+        get_color="color",
+        get_width=6,
+        pickable=False,
+    )
+    view_state = pdk.ViewState(
+        latitude=26.8475,
+        longitude=80.9470,
+        zoom=14,
+        pitch=45,
+    )
+    tooltip = {
+        "html": "<b>Intersection {id}</b><br/>State: {state}<br/>Lane: {active_lane}",
+    }
+    deck = pdk.Deck(
+        layers=[roads_layer, layer],
+        initial_view_state=view_state,
+        tooltip=tooltip,
+    )
+    st.pydeck_chart(deck, use_container_width=True)
 
 
 def _render_comparison(
@@ -130,6 +421,18 @@ def _init_session_state() -> None:
         st.session_state.last_corridor = False
     if "playback_reset_id" not in st.session_state:
         st.session_state.playback_reset_id = 0
+    if "signal_timeline" not in st.session_state:
+        st.session_state.signal_timeline = deque(maxlen=60)
+    if "signal_lane" not in st.session_state:
+        st.session_state.signal_lane = None
+    if "pending_signal_lane" not in st.session_state:
+        st.session_state.pending_signal_lane = None
+    if "pending_green_time" not in st.session_state:
+        st.session_state.pending_green_time = 10
+    if "timer" not in st.session_state:
+        st.session_state.timer = 0
+    if "signal_last_tick" not in st.session_state:
+        st.session_state.signal_last_tick = perf_counter()
 
 
 def _log_event(message: str) -> None:
@@ -142,6 +445,19 @@ def _reset_demo() -> None:
     st.session_state.last_emergency = False
     st.session_state.last_corridor = False
     st.session_state.playback_reset_id += 1
+    st.session_state.signal_timeline = deque(maxlen=60)
+    st.session_state.signal_lane = None
+    st.session_state.pending_signal_lane = None
+    st.session_state.pending_green_time = 10
+    st.session_state.timer = 0
+    st.session_state.signal_last_tick = perf_counter()
+
+
+def _update_signal_timeline(result: dict) -> None:
+    green_times = result.get("green_times", {})
+    if not isinstance(green_times, dict) or not green_times:
+        return
+    st.session_state.signal_timeline.append({lane: float(sec) for lane, sec in green_times.items()})
 
 
 def _generate_demo_corridor(route: list[str], current_index: int) -> dict[str, str]:
@@ -270,6 +586,15 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Controls")
+        speed = st.slider(
+            "Simulation Speed",
+            min_value=0.5,
+            max_value=3.0,
+            value=1.0,
+            step=0.5,
+        )
+        st.write(f"Current Speed: {speed}x")
+        auto_run = st.toggle("Auto Run Simulation", value=True)
         cycle_time = st.slider("Cycle time (sec)", min_value=30, max_value=180, value=120, step=5)
         confidence_threshold = st.slider(
             "Confidence threshold",
@@ -296,8 +621,13 @@ def main() -> None:
         loading_placeholder = st.empty()
 
     with right_column:
+        state_decision_placeholder = st.empty()
+        crash_panel_placeholder = st.empty()
+        map_placeholder = st.empty()
         status_placeholder = st.empty()
+        signal_placeholder = st.empty()
         metrics_placeholder = st.empty()
+        graphs_placeholder = st.empty()
         corridor_status_placeholder = st.empty()
         corridor_placeholder = st.empty()
         comparison_placeholder = st.empty()
@@ -316,6 +646,14 @@ def main() -> None:
 
     if not start_processing:
         status_placeholder.info("Ready to process video.")
+        with signal_placeholder.container():
+            _render_signal_panel(st.session_state.signal_lane, int(st.session_state.timer))
+        return
+
+    if not auto_run:
+        status_placeholder.warning("Simulation paused. Enable Auto Run Simulation to run updates.")
+        with signal_placeholder.container():
+            _render_signal_panel(st.session_state.signal_lane, int(st.session_state.timer))
         return
 
     capture: cv2.VideoCapture | None = None
@@ -330,6 +668,11 @@ def main() -> None:
 
         frame_index = 0
         while True:
+            if not auto_run:
+                status_placeholder.warning("Simulation paused. Enable Auto Run Simulation to resume updates.")
+                break
+
+            loop_start = perf_counter()
             success, frame = capture.read()
             if not success or frame is None:
                 status_placeholder.success("Video processing completed.")
@@ -369,6 +712,13 @@ def main() -> None:
             previous_frame_time = current_time
             corridor_active = emergency_mode and bool(result.get("emergency_route"))
             _update_event_log(result, corridor_active)
+            _update_signal_timeline(result)
+            signal_lane, signal_timer = _update_signal_animation(result, speed)
+            intersections = _simulate_intersections(
+                result=result,
+                processed_frames=processed_frames,
+                emergency_mode=emergency_mode,
+            )
 
             display_frame = _draw_status_overlay(
                 frame=result["frame"].copy(),
@@ -394,14 +744,30 @@ def main() -> None:
                 )
                 corridor_status_placeholder.empty()
 
+            with state_decision_placeholder.container():
+                _render_state_and_decision(result)
+
+            with crash_panel_placeholder.container():
+                _render_crash_panel(result)
+
+            with map_placeholder.container():
+                _render_map_view(intersections)
+
+            with signal_placeholder.container():
+                _render_signal_panel(signal_lane, signal_timer)
+
             with metrics_placeholder.container():
+                density_map = _resolve_density_map(result)
                 _render_metrics(
                     lane_counts=result["lane_counts"],
-                    densities=result["densities"],
+                    densities=density_map,
                     green_times=result["green_times"],
                     active_lane=result["active_lane"],
                     fps=fps,
                 )
+
+            with graphs_placeholder.container():
+                _render_flow_graphs(result)
 
             with corridor_placeholder.container():
                 _render_corridor(
@@ -418,6 +784,11 @@ def main() -> None:
 
             with log_placeholder.container():
                 _render_log_panel()
+
+            target_interval = 1.0 / 12.0
+            elapsed = perf_counter() - loop_start
+            if elapsed < target_interval:
+                time.sleep((target_interval - elapsed) / speed)
 
         loading_placeholder.empty()
     finally:
