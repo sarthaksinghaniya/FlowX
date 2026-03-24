@@ -1,0 +1,8 @@
+train: C:\Users\LOQ\Desktop\FlowX\config\traffic_sign_train_resolved.txt
+val: C:\Users\LOQ\Desktop\FlowX\config\traffic_sign_val_resolved.txt
+nc: 4
+names:
+- prohibitory
+- danger
+- mandatory
+- other

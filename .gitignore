@@ -21,3 +21,5 @@ Thumbs.db
 .DS_Store
 
 datasets/
+traffic_sign_dataset/
+signs/
