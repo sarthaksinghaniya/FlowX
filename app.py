@@ -5,6 +5,7 @@ import tempfile
 from time import perf_counter
 import time
 from pathlib import Path
+from typing import Any
 
 import cv2
 import pydeck as pdk
@@ -171,14 +172,32 @@ def _state_label(raw_state: str | None) -> str:
     return "NORMAL"
 
 
+def _format_selected_lane_label(result: dict) -> str:
+    active_lane = result.get("active_lane")
+    if isinstance(active_lane, str) and active_lane.startswith("lane_"):
+        lane_number = active_lane.split("_")[-1]
+        if lane_number.isdigit():
+            return f"Lane {lane_number}"
+
+    selected_lane = result.get("selected_lane")
+    if selected_lane is None:
+        return "N/A"
+
+    try:
+        lane_number = int(selected_lane)
+    except (TypeError, ValueError):
+        return "N/A"
+
+    if lane_number <= 0:
+        return "N/A"
+
+    return f"Lane {lane_number}"
+
+
 def _render_state_and_decision(result: dict) -> None:
     state = _state_label(result.get("state"))
     reason = result.get("reason") or "Normal flow allocation"
-    selected_lane = result.get("selected_lane")
-    if selected_lane is None or int(selected_lane) < 0:
-        selected_lane_text = "N/A"
-    else:
-        selected_lane_text = f"Lane {int(selected_lane) + 1}"
+    selected_lane_text = _format_selected_lane_label(result)
 
     state_color = {
         "NORMAL": "#16a34a",
@@ -392,7 +411,7 @@ def _render_comparison(
     st.bar_chart(chart_data)
 
 
-def _resolve_video_source(uploaded_file: st.runtime.uploaded_file_manager.UploadedFile | None) -> tuple[Path | None, str | None]:
+def _resolve_video_source(uploaded_file: Any | None) -> tuple[Path | None, str | None]:
     if uploaded_file is not None:
         suffix = Path(uploaded_file.name).suffix or ".mp4"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
