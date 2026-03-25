@@ -219,7 +219,7 @@ def main() -> None:
     ).to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
-    model_save_path = Path(args.model_save_path)
+    model_save_path = Path("models/crash_classifier.pth")
     log_save_path = Path(args.log_save_path)
     curve_save_path = Path(args.curve_save_path)
     os.makedirs(model_save_path.parent, exist_ok=True)
@@ -261,21 +261,9 @@ def main() -> None:
             best_val_loss = val_loss
             best_epoch = epoch
             no_improve_epochs = 0
-            torch.save(
-                {
-                    "model_state_dict": model.state_dict(),
-                    "best_val_loss": best_val_loss,
-                    "best_epoch": best_epoch,
-                    "config": {
-                        "num_frames": args.num_frames,
-                        "batch_size": args.batch_size,
-                        "lr": args.lr,
-                        "epochs": args.epochs,
-                        "patience": args.patience,
-                    },
-                },
-                model_save_path,
-            )
+            os.makedirs("models", exist_ok=True)
+            torch.save(model.state_dict(), "models/crash_classifier.pth")
+            print("Model saved at:", os.path.abspath("models/crash_classifier.pth"))
         else:
             no_improve_epochs += 1
 
