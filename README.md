@@ -164,6 +164,29 @@ Notes:
 - `models/crash_classifier.pth` is optional at runtime; if it is absent, crash inference gracefully falls back instead of breaking the app
 - First deploy can take a while because `torch` and `ultralytics` are large dependencies
 
+## Render Deployment
+
+FlowX is also set up for Render with the included `render.yaml` blueprint.
+
+Deploy steps:
+
+1. Push the repository to GitHub
+2. In Render, create a new Blueprint instance from this repository
+3. Confirm the detected web service settings from `render.yaml`
+4. Deploy the service
+
+Render will use:
+
+- `pip install -r requirements.txt` as the build command
+- `streamlit run app.py --server.address 0.0.0.0 --server.port $PORT` as the start command
+
+Render notes:
+
+- `opencv-python-headless` is used so OpenCV works in Render's Linux server environment without desktop GUI libraries
+- First deploy can take a while because `torch`, `torchvision`, and `ultralytics` are large dependencies
+- Keep `demo/test_video.mp4` and `models/traffic_detector.pt` in the repo because the dashboard expects them by default
+- If Render's free instance memory is too tight for model loading, switch to a higher-memory plan
+
 ### Train Crash Model
 
 ```bash
