@@ -148,7 +148,6 @@ FlowX is set up for Streamlit Community Cloud deployment with:
 
 - `app.py` as the app entrypoint
 - `requirements.txt` for Python dependencies
-- `packages.txt` for Linux system packages needed by OpenCV/video decoding
 - `.streamlit/config.toml` for Streamlit app configuration
 
 Deploy steps:
