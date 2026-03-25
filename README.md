@@ -142,6 +142,29 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Streamlit Deployment
+
+FlowX is set up for Streamlit Community Cloud deployment with:
+
+- `app.py` as the app entrypoint
+- `requirements.txt` for Python dependencies
+- `packages.txt` for Linux system packages needed by OpenCV/video decoding
+- `.streamlit/config.toml` for Streamlit app configuration
+
+Deploy steps:
+
+1. Push the repository to GitHub
+2. Open Streamlit Community Cloud
+3. Create a new app from this repo
+4. Set the main file path to `app.py`
+5. Deploy
+
+Notes:
+
+- Keep `demo/test_video.mp4` and `models/traffic_detector.pt` in the repo because the dashboard expects them by default
+- `models/crash_classifier.pth` is optional at runtime; if it is absent, crash inference gracefully falls back instead of breaking the app
+- First deploy can take a while because `torch` and `ultralytics` are large dependencies
+
 ### Train Crash Model
 
 ```bash

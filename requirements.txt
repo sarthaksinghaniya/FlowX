@@ -1,3 +1,7 @@
+streamlit
+pydeck
+numpy
 opencv-python
 ultralytics
-numpy
+torch
+torchvision
